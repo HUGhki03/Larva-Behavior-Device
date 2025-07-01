@@ -1,6 +1,8 @@
 import time
 import cv2
 import numpy as np
+import platform  # 新增：判断操作系统，简化windows 系统像素倒置的处理
+import mvsdk     # 新增:适应新相机
 from statemachine import StateMachine
 from statemachine import Initializer
 from statemachine import Zero
@@ -85,10 +87,89 @@ def FindLarva(img):
 resx = 450
 resy = 450
 
-camera = cv2.VideoCapture(0,cv2.CAP_DSHOW)
-camera.set(cv2.CAP_PROP_FPS, 20)
-camera.set(cv2.CAP_PROP_FRAME_WIDTH,5000)
-camera.set(cv2.CAP_PROP_FRAME_HEIGHT,5000)
+# 删除 ：OpenCV的VideoCapture只能控制标准USB摄像头，无法控制目前工业相机
+#camera = cv2.VideoCapture(0,cv2.CAP_DSHOW)
+#camera.set(cv2.CAP_PROP_FPS, 20)
+#camera.set(cv2.CAP_PROP_FRAME_WIDTH,5000)
+#camera.set(cv2.CAP_PROP_FRAME_HEIGHT,5000)
+
+# 新增：-使用mvsdk库来控制新买的工业相机 -封装在MindVisionCamera类中
+class MindVisionCamera:
+    def __init__(self):
+        self.hCamera = None
+        self.pFrameBuffer = None
+        self.cap = None
+        self.monoCamera = False
+        
+    def open(self):
+        DevList = mvsdk.CameraEnumerateDevice()
+        if len(DevList) < 1:
+            raise Exception("No camera found!")
+        
+        print(f"Found camera: {DevList[0].GetFriendlyName()}")
+        self.hCamera = mvsdk.CameraInit(DevList[0], -1, -1)
+        self.cap = mvsdk.CameraGetCapability(self.hCamera)
+        
+        # 判断是否为黑白相机
+        self.monoCamera = (self.cap.sIspCapacity.bMonoSensor != 0)
+        if self.monoCamera:
+            mvsdk.CameraSetIspOutFormat(self.hCamera, mvsdk.CAMERA_MEDIA_TYPE_MONO8)
+        else:
+            mvsdk.CameraSetIspOutFormat(self.hCamera, mvsdk.CAMERA_MEDIA_TYPE_BGR8)
+        
+        # 设置连续采集模式
+        mvsdk.CameraSetTriggerMode(self.hCamera, 0)
+        
+        # 手动曝光，50ms
+        mvsdk.CameraSetAeState(self.hCamera, 0)
+        mvsdk.CameraSetExposureTime(self.hCamera, 50 * 1000)
+        
+        # 分配缓冲区
+        FrameBufferSize = self.cap.sResolutionRange.iWidthMax * \
+                         self.cap.sResolutionRange.iHeightMax * \
+                         (1 if self.monoCamera else 3)
+        self.pFrameBuffer = mvsdk.CameraAlignMalloc(FrameBufferSize, 16)
+        
+        # 开始采集
+        mvsdk.CameraPlay(self.hCamera)
+        print("Camera initialized successfully")
+        
+    def grab(self):
+        try:
+            pRawData, FrameHead = mvsdk.CameraGetImageBuffer(self.hCamera, 200)
+            mvsdk.CameraImageProcess(self.hCamera, pRawData, self.pFrameBuffer, FrameHead)
+            mvsdk.CameraReleaseImageBuffer(self.hCamera, pRawData)
+            
+            # Windows系统需要翻转
+            if platform.system() == "Windows":
+                mvsdk.CameraFlipFrameBuffer(self.pFrameBuffer, FrameHead, 1)
+            
+            # 转换为numpy数组
+            frame_data = (mvsdk.c_ubyte * FrameHead.uBytes).from_address(self.pFrameBuffer)
+            frame = np.frombuffer(frame_data, dtype=np.uint8)
+            
+            # 根据相机类型重塑数组
+            if self.monoCamera:
+                frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth))
+                # 转换为BGR格式（灰度图转3通道）
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            else:
+                frame = frame.reshape((FrameHead.iHeight, FrameHead.iWidth, 3))
+            
+            return frame
+        except mvsdk.CameraException:
+            return None
+    
+    def close(self):
+        if self.hCamera:
+            mvsdk.CameraUnInit(self.hCamera)
+        if self.pFrameBuffer:
+            mvsdk.CameraAlignFree(self.pFrameBuffer)
+
+# 初始化相机
+camera = MindVisionCamera()
+camera.open()
+
 
 fgthreshold = 15
 
@@ -146,18 +227,29 @@ task2.do_channels.add_do_chan("Dev2/port2/line7")
 
 
 flag = True
-# 读帧的主程序
+
+# 修改（2025/7/1）： 读帧的主程序
 def capture_frames():
-    while True:
-        ret, frame = camera.read()
-        if ret:
-            global frame_data
-            frame_data = frame
+    global frame_data, flag
+    first_print = True  # 新增：用于测试第一次打印像素长与宽的信息
+    while flag:
+        frame = camera.grab()
+        if frame is not None:
+            frame_data = frame.copy()
+            
+            # 新增：测试：只打印一次图像尺寸
+            if first_print:
+                print(f"Actual image size: {frame.shape}")  # 添加这行
+                first_print = False
+                
+            # 缩小显示尺寸
+            display_frame = cv2.resize(frame, (800, 600))
+            cv2.imshow('FRAME', display_frame)
         else:
-            break
-        cv2.imshow('FRAME', frame)
-        if cv2.waitKey(1) == 27:
-            global flag
+            time.sleep(0.01)
+            continue
+            
+        if cv2.waitKey(1) == 27:  # ESC键退出
             flag = False
             break
 
@@ -212,8 +304,12 @@ class livetracker(threading.Thread):
         statemachine = StateMachine(initial,locs)
         #建立背景
         fps = 10 #frame rate
-        ret, frame = camera.read()
-        frame_0 = self.readImage(frame)
+        
+        # 删除这两行：适配新的图像获取方式确保使用全局frame_data而非直接读取
+        # ret, frame = camera.read()
+        # frame_0 = self.readImage(frame)
+        # 修改为：
+        frame_0 = self.readImage(frame_data.copy())
         Ims = deque()                   #set up FIFO data structure for video frames
         Ims.append(frame_0)
         N = 1                           #N keeps track of how many frames have gone by
@@ -326,19 +422,35 @@ class livetracker(threading.Thread):
             filehandle.writelines("%s\n" % place for place in positionframefile)
         print(self.name + "test runs done")
 
-    def select_windows(self):  #设置相机读取的几个区域
+    
+    
+    def select_windows(self):
+    # 图像实际大小：2064×3088
+    # 原设计是基于5000×5000，现在需要按比例调整    
         if self.name == 'A':
-            return 650, 1100, 240, 690
+            # 原：650, 1100, 240, 690
+            # 新：按比例缩放
+            return 260, 440, 96, 276  
         elif self.name == 'B':
-            return 650, 1100, 1680, 2130
+            # 原：650, 1100, 1680, 2130
+            return 260, 440, 672, 852    
         elif self.name == 'C':
-            return 650, 1100, 3120, 3570
+            # 原：650, 1100, 3120, 3570 (3120超出边界)
+            # 修正：使用图像右侧区域
+            return 260, 440, 1248, 1428     
         elif self.name == 'D':
-            return 2000, 2450, 230, 680
+            # 原：2000, 2450, 230, 680
+            return 800, 980, 92, 272            
         elif self.name == 'E':
-            return 2000, 2450, 1670, 2120
+            # 原：2000, 2450, 1670, 2120
+            return 800, 980, 668, 848 
         elif self.name == 'F':
-            return 1950, 2400, 3120, 3570 
+            # 原：1950, 2400, 3120, 3570 (3120超出边界)
+            return 780, 960, 1248, 1428
+        
+        
+    
+    
     
     def readImage(self, im):  # captures an image of the video capture object
         r_start, r_end, c_start, c_end = self.select_windows()
@@ -371,6 +483,17 @@ class livetracker(threading.Thread):
 
 # 多线程
 frame_data = None
+# 添加等待相机初始化的代码
+print("Waiting for camera initialization...")
+while frame_data is None:
+    frame = camera.grab()
+    if frame is not None:
+        frame_data = frame.copy()
+    time.sleep(0.1)
+print('Camera ready, starting threads...')
+
+
+
 t0 = threading.Thread(target=capture_frames)
 t1 = livetracker(name='A') #创建线程，需要几个加入几个，注意线程名字
 t2 = livetracker(name='B')
@@ -421,7 +544,7 @@ t4.join()
 t5.join()
 t6.join()
 cv2.destroyAllWindows()
-camera.release()
+camera.close()  # 使用新的close方法（2025/7/1）：替换release
 print("程序结束")
 executor.shutdown(wait=False)
 sys.exit()

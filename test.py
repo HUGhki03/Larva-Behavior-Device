@@ -17,7 +17,7 @@ from collections import Counter
 from collections import deque
 from BakCreator import BakCreator
 from BakCreator import FIFO
-from region import Region
+from region_shihan import Region # 新增：采用shihan 的Region类
 import datetime
 import os
 import threading

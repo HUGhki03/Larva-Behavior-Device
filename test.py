@@ -1,8 +1,8 @@
 import time
 import cv2
 import numpy as np
-import platform  # 新增：判断操作系统，简化windows 系统像素倒置的处理
-import mvsdk     # 新增:适应新相机
+import platform
+import mvsdk
 from statemachine import StateMachine
 from statemachine import Initializer
 from statemachine import Zero
@@ -17,18 +17,13 @@ from collections import Counter
 from collections import deque
 from BakCreator import BakCreator
 from BakCreator import FIFO
-from region_shihan import Region # 新增：采用shihan 的Region类
+from region_shihan import Region
 import datetime
 import os
 import threading
 import sys
 import nidaqmx
 import concurrent.futures
-
-
-
-
-
 
 
 def ExponentialFilter(current, new, weight):
@@ -52,6 +47,7 @@ def displacement(new,prev):  # calculates the Euclidean distance between the two
 	yf = new[1]
 	return(np.sqrt((xi-xf)**2 + (yf-yi)**2))
 
+
 def Centroid(cnt):
 	M = cv2.moments(cnt)  # calculates the centroid of the contour
 	cx = int(M['m10']/M['m00'])
@@ -62,7 +58,6 @@ def Centroid(cnt):
 
 def FindLarva(img):
 	contours,_ = cv2.findContours(img,cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE )
-#Neil/Rey: on Pi's with Buster, it's 2 arguments not 3 (so contours,_ not _,contours,_)
 	length =int(len(contours))
 	areas = []
 	for i in range(0,length):
@@ -81,19 +76,7 @@ def FindLarva(img):
 		centroid = [-1,-1]
 		return centroid
 
-############################################################################################
-##################################CAMERA INITIALIZATION####################################
 
-resx = 450
-resy = 450
-
-# 删除 ：OpenCV的VideoCapture只能控制标准USB摄像头，无法控制目前工业相机
-#camera = cv2.VideoCapture(0,cv2.CAP_DSHOW)
-#camera.set(cv2.CAP_PROP_FPS, 20)
-#camera.set(cv2.CAP_PROP_FRAME_WIDTH,5000)
-#camera.set(cv2.CAP_PROP_FRAME_HEIGHT,5000)
-
-# 新增：-使用mvsdk库来控制新买的工业相机 -封装在MindVisionCamera类中
 class MindVisionCamera:
     def __init__(self):
         self.hCamera = None
@@ -166,92 +149,6 @@ class MindVisionCamera:
         if self.pFrameBuffer:
             mvsdk.CameraAlignFree(self.pFrameBuffer)
 
-# 初始化相机
-camera = MindVisionCamera()
-camera.open()
-
-
-fgthreshold = 15
-
-# 阀门端口设置
-task1 = nidaqmx.Task()
-task1.do_channels.add_do_chan("Dev1/port0/line0")
-task1.do_channels.add_do_chan("Dev1/port0/line1")
-task1.do_channels.add_do_chan("Dev1/port0/line2")
-task1.do_channels.add_do_chan("Dev1/port0/line3")
-task1.do_channels.add_do_chan("Dev1/port0/line4")
-task1.do_channels.add_do_chan("Dev1/port0/line5")
-task1.do_channels.add_do_chan("Dev1/port0/line6")
-task1.do_channels.add_do_chan("Dev1/port0/line7")
-task1.do_channels.add_do_chan("Dev1/port1/line0")
-task1.do_channels.add_do_chan("Dev1/port1/line1")
-task1.do_channels.add_do_chan("Dev1/port1/line2")
-task1.do_channels.add_do_chan("Dev1/port1/line3")
-task1.do_channels.add_do_chan("Dev1/port1/line4")
-task1.do_channels.add_do_chan("Dev1/port1/line5")
-task1.do_channels.add_do_chan("Dev1/port1/line6")
-task1.do_channels.add_do_chan("Dev1/port1/line7")
-task1.do_channels.add_do_chan("Dev1/port2/line0")
-task1.do_channels.add_do_chan("Dev1/port2/line1")
-task1.do_channels.add_do_chan("Dev1/port2/line2")
-task1.do_channels.add_do_chan("Dev1/port2/line3")
-task1.do_channels.add_do_chan("Dev1/port2/line4")
-task1.do_channels.add_do_chan("Dev1/port2/line5")
-task1.do_channels.add_do_chan("Dev1/port2/line6")
-task1.do_channels.add_do_chan("Dev1/port2/line7")
-task2 = nidaqmx.Task()
-task2.do_channels.add_do_chan("Dev2/port0/line0")
-task2.do_channels.add_do_chan("Dev2/port0/line1")
-task2.do_channels.add_do_chan("Dev2/port0/line2")
-task2.do_channels.add_do_chan("Dev2/port0/line3")
-task2.do_channels.add_do_chan("Dev2/port0/line4")
-task2.do_channels.add_do_chan("Dev2/port0/line5")
-task2.do_channels.add_do_chan("Dev2/port0/line6")
-task2.do_channels.add_do_chan("Dev2/port0/line7")
-task2.do_channels.add_do_chan("Dev2/port1/line0")
-task2.do_channels.add_do_chan("Dev2/port1/line1")
-task2.do_channels.add_do_chan("Dev2/port1/line2")
-task2.do_channels.add_do_chan("Dev2/port1/line3")
-task2.do_channels.add_do_chan("Dev2/port1/line4")
-task2.do_channels.add_do_chan("Dev2/port1/line5")
-task2.do_channels.add_do_chan("Dev2/port1/line6")
-task2.do_channels.add_do_chan("Dev2/port1/line7")
-task2.do_channels.add_do_chan("Dev2/port2/line0")
-task2.do_channels.add_do_chan("Dev2/port2/line1")
-task2.do_channels.add_do_chan("Dev2/port2/line2")
-task2.do_channels.add_do_chan("Dev2/port2/line3")
-task2.do_channels.add_do_chan("Dev2/port2/line4")
-task2.do_channels.add_do_chan("Dev2/port2/line5")
-task2.do_channels.add_do_chan("Dev2/port2/line6")
-task2.do_channels.add_do_chan("Dev2/port2/line7")
-
-
-flag = True
-
-# 修改（2025/7/1）： 读帧的主程序
-def capture_frames():
-    global frame_data, flag
-    first_print = True  # 新增：用于测试第一次打印像素长与宽的信息
-    while flag:
-        frame = camera.grab()
-        if frame is not None:
-            frame_data = frame.copy()
-            
-            # 新增：测试：只打印一次图像尺寸
-            if first_print:
-                print(f"Actual image size: {frame.shape}")  # 添加这行
-                first_print = False
-                
-            # 缩小显示尺寸
-            display_frame = cv2.resize(frame, (800, 600))
-            cv2.imshow('FRAME', display_frame)
-        else:
-            time.sleep(0.01)
-            continue
-            
-        if cv2.waitKey(1) == 27:  # ESC键退出
-            flag = False
-            break
 
 class livetracker(threading.Thread):
     def __init__(self, name=None):
@@ -267,7 +164,7 @@ class livetracker(threading.Thread):
         # 选择区域
         locs = []
         def selectRegions(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN:  # 	indicates that the left mouse button is pressed.
+            if event == cv2.EVENT_LBUTTONDOWN:
                 region = [x,y]
                 locs.append(region)
         number_of_regions = 7
@@ -305,20 +202,16 @@ class livetracker(threading.Thread):
         #建立背景
         fps = 10 #frame rate
         
-        # 删除这两行：适配新的图像获取方式确保使用全局frame_data而非直接读取
-        # ret, frame = camera.read()
-        # frame_0 = self.readImage(frame)
-        # 修改为：
         frame_0 = self.readImage(frame_data.copy())
-        Ims = deque()                   #set up FIFO data structure for video frames
+        Ims = deque()
         Ims.append(frame_0)
-        N = 1                           #N keeps track of how many frames have gone by
-        window = 60                     #sets the length of the window over which mean is calculated
+        N = 1
+        window = 60
         print(self.name + 'Building Background')
         while True:
             frame = frame_data.copy()
             im = self.readImage(frame)
-            if N == fps:            #add a new frame to kernel each second
+            if N == fps:
                 Ims.append(im)
                 N = 1
             if len(Ims)==window:
@@ -344,7 +237,6 @@ class livetracker(threading.Thread):
         decisionlog = []
         valvelog = []
         positionframefile = []
-        # naivefilenamepath = filepath + filename + '_testfile.txt'
         valvelogpath = filepath + filename + '_valvelog.txt'
         decisionlogpath = filepath + filename + '_decisionlog.txt'
         positionframepath = filepath + filename + '_positionframe.txt'
@@ -405,9 +297,9 @@ class livetracker(threading.Thread):
         lightsvalves.offall()
 
         # 数据写入
-        with open(valvelogpath,'w') as filehandle: #valvelog 
+        with open(valvelogpath,'w') as filehandle: 
             filehandle.writelines("%s\n" % place for place in valvelog)
-        with open(decisionlogpath,'w') as filehandle: #decision list descriptive
+        with open(decisionlogpath,'w') as filehandle:
             filehandle.writelines("%s\n" % place for place in decisionlog)
 
             count = Counter(decisionlist)
@@ -418,48 +310,32 @@ class livetracker(threading.Thread):
             ratiotwo = round(counttwo/(countall+0.0000001),2)
             filehandle.writelines(["\nTotal Choose: %s" % countall, "\nChoose1: %s" % ratioone, "\nChoose2: %s" % ratiotwo])
 
-        with open(positionframepath,'w') as filehandle: #larva position at each timestamp
+        with open(positionframepath,'w') as filehandle:
             filehandle.writelines("%s\n" % place for place in positionframefile)
         print(self.name + "test runs done")
-
-    
     
     def select_windows(self):
-    # 图像实际大小：2064×3088
-    # 原设计是基于5000×5000，现在需要按比例调整    
         if self.name == 'A':
-            # 原：650, 1100, 240, 690
-            # 新：按比例缩放
             return 260, 440, 96, 276  
         elif self.name == 'B':
-            # 原：650, 1100, 1680, 2130
             return 260, 440, 672, 852    
         elif self.name == 'C':
-            # 原：650, 1100, 3120, 3570 (3120超出边界)
-            # 修正：使用图像右侧区域
             return 260, 440, 1248, 1428     
         elif self.name == 'D':
-            # 原：2000, 2450, 230, 680
             return 800, 980, 92, 272            
         elif self.name == 'E':
-            # 原：2000, 2450, 1670, 2120
             return 800, 980, 668, 848 
         elif self.name == 'F':
-            # 原：1950, 2400, 3120, 3570 (3120超出边界)
             return 780, 960, 1248, 1428
-        
-        
     
-    
-    
-    def readImage(self, im):  # captures an image of the video capture object
+    def readImage(self, im):
         r_start, r_end, c_start, c_end = self.select_windows()
         im = im[r_start:r_end,c_start:c_end]
         im = cv2.resize(im, (resx, resy))
-        im = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)  # converts the image to grayscale
+        im = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
         return im
     
-    def select_valves(self):  # 读取的几个阀门端口
+    def select_valves(self):
         if self.name == 'A':
             return [22,23,12,13,14,15]
         elif self.name == 'B':
@@ -473,78 +349,182 @@ class livetracker(threading.Thread):
         elif self.name == 'F':
             return list(range(0,6))
         
-    def select_task(self):   #选择用哪个设备的端口
+    def select_task(self):
          if self.name in ['D','E','F']:
               return task1
          elif self.name in ['A','B','C']:
               return task2
-        
-        
-
-# 多线程
-frame_data = None
-# 添加等待相机初始化的代码
-print("Waiting for camera initialization...")
-while frame_data is None:
-    frame = camera.grab()
-    if frame is not None:
-        frame_data = frame.copy()
-    time.sleep(0.1)
-print('Camera ready, starting threads...')
 
 
+# ========== 以下是主程序部分，只在直接运行时执行 ==========
 
-t0 = threading.Thread(target=capture_frames)
-t1 = livetracker(name='A') #创建线程，需要几个加入几个，注意线程名字
-t2 = livetracker(name='B')
-t3 = livetracker(name='C')
-t4 = livetracker(name='D')
-t5 = livetracker(name='E')
-t6 = livetracker(name='F')
-lock = threading.Lock()
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-executor.submit(t0.start) #开始读帧
-time.sleep(5)
-executor.submit(t1.start) #执行线程
-executor.submit(t2.start)
-executor.submit(t3.start)
-executor.submit(t4.start)
-executor.submit(t5.start)
-executor.submit(t6.start)
-time.sleep(1)
-while flag:  #多加线程后也要改的地方
-    if not t1.is_alive():
-        t1 = livetracker(name='A')
-        executor.submit(t1.start)
-        time.sleep(1)
-    if not t2.is_alive():
-        t2 = livetracker(name='B')
-        executor.submit(t2.start)
-        time.sleep(1)
-    if not t3.is_alive():
-        t3 = livetracker(name='C')
-        executor.submit(t3.start)
-        time.sleep(1)
-    if not t4.is_alive():
-        t4 = livetracker(name='D')
-        executor.submit(t4.start)
-        time.sleep(1)
-    if not t5.is_alive():
-        t5 = livetracker(name='E')
-        executor.submit(t5.start)
-        time.sleep(1)
-    if not t6.is_alive():
-        t6 = livetracker(name='F')
-        executor.submit(t6.start)
-        time.sleep(1)
-t1.join()
-t2.join()
-t3.join()
-t4.join()
-t5.join()
-t6.join()
-cv2.destroyAllWindows()
-camera.close()  # 使用新的close方法（2025/7/1）：替换release
-print("程序结束")
-executor.shutdown(wait=False)
-sys.exit()
+def capture_frames():
+    """读取相机帧的函数"""
+    global frame_data, flag
+    first_print = True
+    while flag:
+        frame = camera.grab()
+        if frame is not None:
+            frame_data = frame.copy()
+            
+            if first_print:
+                print(f"Actual image size: {frame.shape}")
+                first_print = False
+                
+            # 缩小显示尺寸
+            display_frame = cv2.resize(frame, (800, 600))
+            cv2.imshow('FRAME', display_frame)
+        else:
+            time.sleep(0.01)
+            continue
+            
+        if cv2.waitKey(1) == 27:  # ESC键退出
+            flag = False
+            break
+
+
+def main():
+    """主函数 - 原始的多窗口追踪系统"""
+    global camera, frame_data, flag, lock, task1, task2, resx, resy, fgthreshold
+    
+    # 全局参数
+    resx = 450
+    resy = 450
+    fgthreshold = 15
+    
+    # 初始化相机
+    camera = MindVisionCamera()
+    camera.open()
+    
+    # 阀门端口设置
+    task1 = nidaqmx.Task()
+    task1.do_channels.add_do_chan("Dev1/port0/line0")
+    task1.do_channels.add_do_chan("Dev1/port0/line1")
+    task1.do_channels.add_do_chan("Dev1/port0/line2")
+    task1.do_channels.add_do_chan("Dev1/port0/line3")
+    task1.do_channels.add_do_chan("Dev1/port0/line4")
+    task1.do_channels.add_do_chan("Dev1/port0/line5")
+    task1.do_channels.add_do_chan("Dev1/port0/line6")
+    task1.do_channels.add_do_chan("Dev1/port0/line7")
+    task1.do_channels.add_do_chan("Dev1/port1/line0")
+    task1.do_channels.add_do_chan("Dev1/port1/line1")
+    task1.do_channels.add_do_chan("Dev1/port1/line2")
+    task1.do_channels.add_do_chan("Dev1/port1/line3")
+    task1.do_channels.add_do_chan("Dev1/port1/line4")
+    task1.do_channels.add_do_chan("Dev1/port1/line5")
+    task1.do_channels.add_do_chan("Dev1/port1/line6")
+    task1.do_channels.add_do_chan("Dev1/port1/line7")
+    task1.do_channels.add_do_chan("Dev1/port2/line0")
+    task1.do_channels.add_do_chan("Dev1/port2/line1")
+    task1.do_channels.add_do_chan("Dev1/port2/line2")
+    task1.do_channels.add_do_chan("Dev1/port2/line3")
+    task1.do_channels.add_do_chan("Dev1/port2/line4")
+    task1.do_channels.add_do_chan("Dev1/port2/line5")
+    task1.do_channels.add_do_chan("Dev1/port2/line6")
+    task1.do_channels.add_do_chan("Dev1/port2/line7")
+    
+    task2 = nidaqmx.Task()
+    task2.do_channels.add_do_chan("Dev2/port0/line0")
+    task2.do_channels.add_do_chan("Dev2/port0/line1")
+    task2.do_channels.add_do_chan("Dev2/port0/line2")
+    task2.do_channels.add_do_chan("Dev2/port0/line3")
+    task2.do_channels.add_do_chan("Dev2/port0/line4")
+    task2.do_channels.add_do_chan("Dev2/port0/line5")
+    task2.do_channels.add_do_chan("Dev2/port0/line6")
+    task2.do_channels.add_do_chan("Dev2/port0/line7")
+    task2.do_channels.add_do_chan("Dev2/port1/line0")
+    task2.do_channels.add_do_chan("Dev2/port1/line1")
+    task2.do_channels.add_do_chan("Dev2/port1/line2")
+    task2.do_channels.add_do_chan("Dev2/port1/line3")
+    task2.do_channels.add_do_chan("Dev2/port1/line4")
+    task2.do_channels.add_do_chan("Dev2/port1/line5")
+    task2.do_channels.add_do_chan("Dev2/port1/line6")
+    task2.do_channels.add_do_chan("Dev2/port1/line7")
+    task2.do_channels.add_do_chan("Dev2/port2/line0")
+    task2.do_channels.add_do_chan("Dev2/port2/line1")
+    task2.do_channels.add_do_chan("Dev2/port2/line2")
+    task2.do_channels.add_do_chan("Dev2/port2/line3")
+    task2.do_channels.add_do_chan("Dev2/port2/line4")
+    task2.do_channels.add_do_chan("Dev2/port2/line5")
+    task2.do_channels.add_do_chan("Dev2/port2/line6")
+    task2.do_channels.add_do_chan("Dev2/port2/line7")
+    
+    flag = True
+    frame_data = None
+    lock = threading.Lock()
+    
+    # 等待相机初始化
+    print("Waiting for camera initialization...")
+    while frame_data is None:
+        frame = camera.grab()
+        if frame is not None:
+            frame_data = frame.copy()
+        time.sleep(0.1)
+    print('Camera ready, starting threads...')
+    
+    # 创建线程
+    t0 = threading.Thread(target=capture_frames)
+    t1 = livetracker(name='A')
+    t2 = livetracker(name='B')
+    t3 = livetracker(name='C')
+    t4 = livetracker(name='D')
+    t5 = livetracker(name='E')
+    t6 = livetracker(name='F')
+    
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+    executor.submit(t0.start)
+    time.sleep(5)
+    executor.submit(t1.start)
+    executor.submit(t2.start)
+    executor.submit(t3.start)
+    executor.submit(t4.start)
+    executor.submit(t5.start)
+    executor.submit(t6.start)
+    time.sleep(1)
+    
+    # 监控线程状态并重启
+    while flag:
+        if not t1.is_alive():
+            t1 = livetracker(name='A')
+            executor.submit(t1.start)
+            time.sleep(1)
+        if not t2.is_alive():
+            t2 = livetracker(name='B')
+            executor.submit(t2.start)
+            time.sleep(1)
+        if not t3.is_alive():
+            t3 = livetracker(name='C')
+            executor.submit(t3.start)
+            time.sleep(1)
+        if not t4.is_alive():
+            t4 = livetracker(name='D')
+            executor.submit(t4.start)
+            time.sleep(1)
+        if not t5.is_alive():
+            t5 = livetracker(name='E')
+            executor.submit(t5.start)
+            time.sleep(1)
+        if not t6.is_alive():
+            t6 = livetracker(name='F')
+            executor.submit(t6.start)
+            time.sleep(1)
+    
+    # 等待所有线程结束
+    t1.join()
+    t2.join()
+    t3.join()
+    t4.join()
+    t5.join()
+    t6.join()
+    
+    # 清理资源
+    cv2.destroyAllWindows()
+    camera.close()
+    print("程序结束")
+    executor.shutdown(wait=False)
+    sys.exit()
+
+
+# 只有直接运行这个文件时才执行主程序
+if __name__ == "__main__":
+    main()

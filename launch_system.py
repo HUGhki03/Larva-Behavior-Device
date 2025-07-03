@@ -316,31 +316,75 @@ class IntegratedSystem:
         if camera_id in self.ui.maze_data and maze_id in self.ui.maze_data[camera_id]:
             return self.ui.maze_data[camera_id][maze_id]
         return None
+  
+  
         
+    # 在 IntegratedSystem 类中修改以下方法：
+
     def handle_tracker_data(self, data):
-        """处理来自追踪器的数据"""
-        # 将数据更新到UI
-        camera_id = data.get('camera_id')
-        maze_id = data.get('maze_id')
-        
-        if camera_id is not None and maze_id is not None:
-            if camera_id not in self.ui.maze_data:
-                self.ui.maze_data[camera_id] = {}
-            if maze_id not in self.ui.maze_data[camera_id]:
-                self.ui.maze_data[camera_id][maze_id] = {}
+        """处理来自追踪器的数据（修复版 - 确保数据正确转发）"""
+        try:
+            # 直接转发到UI的数据队列
+            if hasattr(self.ui, 'data_queue') and self.ui.data_queue is not None:
+                # 非阻塞发送
+                try:
+                    self.ui.data_queue.put_nowait(data)
+                except:
+                    # 队列满时跳过
+                    pass
+            else:
+                # 如果队列不可用，直接更新UI数据（后备方案）
+                self.update_ui_data_directly(data)
                 
-            # 更新数据
-            maze_data = self.ui.maze_data[camera_id][maze_id]
+        except Exception as e:
+            print(f"Error handling tracker data: {e}")
+
+    def update_ui_data_directly(self, data):
+        """直接更新UI数据的后备方案"""
+        try:
+            camera_id = data.get('camera_id')
+            maze_id = data.get('maze_id')
             
-            if 'frame' in data:
-                maze_data['frame'] = data['frame']
-            if 'position' in data:
-                maze_data['position'] = data['position']
-            if 'stats' in data:
-                maze_data['stats'] = data['stats']
-            if 'valve_states' in data:
-                maze_data['valve_states'] = data['valve_states']
+            if camera_id is not None and maze_id is not None:
+                if camera_id not in self.ui.maze_data:
+                    self.ui.maze_data[camera_id] = {}
+                if maze_id not in self.ui.maze_data[camera_id]:
+                    self.ui.maze_data[camera_id][maze_id] = {}
+                    
+                # 更新数据
+                maze_data = self.ui.maze_data[camera_id][maze_id]
                 
+                if 'frame' in data:
+                    maze_data['frame'] = data['frame']
+                if 'position' in data:
+                    maze_data['position'] = data['position']
+                if 'stats' in data:
+                    maze_data['stats'] = data['stats']
+                if 'valve_states' in data:
+                    maze_data['valve_states'] = data['valve_states']
+                    
+        except Exception as e:
+            print(f"Error updating UI data directly: {e}")
+
+    def patch_ui_methods(self):
+        """修改UI方法以集成控制器（修复版）"""
+        # 保存原始方法
+        self.ui._original_start_single_maze = self.ui.start_single_maze
+        self.ui._original_stop_single_maze = self.ui.stop_single_maze
+        self.ui._original_stop_all = self.ui.stop_all
+        
+        # 替换为集成方法
+        self.ui.start_single_maze = self.start_single_maze
+        self.ui.stop_single_maze = self.stop_single_maze
+        self.ui.stop_all = self.stop_all
+        self.ui.get_maze_data = self.get_maze_data
+        
+        # 确保控制器的数据队列指向UI的队列
+        if hasattr(self.controller, 'data_queue') and hasattr(self.ui, 'data_queue'):
+            self.controller.data_queue = self.ui.data_queue
+    
+    
+               
     def run(self):
         """运行系统"""
         try:

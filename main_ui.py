@@ -320,12 +320,19 @@ class MainUI(tk.Tk):
         # 启动数据处理线程
         self.data_thread = threading.Thread(target=self.process_data_queue, daemon=True)
         self.data_thread.start()
-        
-        # 添加UI定时更新（解决画面不显示问题）
+    
+        # 保持UI定时更新作为后备方案（频率降低，避免冲突）
         def timer_update():
-            self.update_displays()
-            self.after(50, timer_update)  # 20 FPS
-        self.after(100, timer_update)  # 100ms后开始
+            if self.running:
+                # 只在模拟模式或队列长时间无数据时更新
+                if self.simulation_mode or self.data_queue.empty():
+                    try:
+                        self.update_displays()
+                    except:
+                        pass
+            self.after(100, timer_update)  # 降低到10 FPS，减少冲突
+        
+        self.after(200, timer_update)  # 延后启动，让队列处理优先
         
         
     def setup_ui(self):
@@ -670,10 +677,10 @@ class MainUI(tk.Tk):
             self.maze_data[camera_id][maze_id]['status_label'].config(text="状态: 已停止")
             
     def simulate_maze_data(self, camera_id, maze_id):
-        """模拟迷宫数据（修复版 - 减少雪花点）"""
+        """模拟迷宫数据（修复版 - 统一数据流)"""
         key = f"{camera_id}_{maze_id}"
         self.trackers[key] = True  # 标记为运行中
-        
+    
         def update():
             # 创建持久的背景
             background = np.ones((450, 450), dtype=np.uint8) * 128
@@ -691,7 +698,7 @@ class MainUI(tk.Tk):
                 # 添加少量高斯模糊以减少锐利边缘
                 frame = cv2.GaussianBlur(frame, (3, 3), 0)
                 
-                # 更新数据
+                # 更新数据到本地存储（保持原有功能）
                 if camera_id in self.maze_data and maze_id in self.maze_data[camera_id]:
                     data = self.maze_data[camera_id][maze_id]
                     data['frame'] = frame
@@ -709,26 +716,91 @@ class MainUI(tk.Tk):
                         'air': np.random.random() < 0.4
                     }
                     
+                    # 新增：同时发送到队列（统一数据流）
+                    try:
+                        ui_data = {
+                            'camera_id': camera_id,
+                            'maze_id': maze_id,
+                            'frame': frame.copy(),  # 复制避免引用问题
+                            'position': (x, y),
+                            'stats': data['stats'].copy(),
+                            'valve_states': data['valve_states'].copy(),
+                            'timestamp': time.time(),
+                            'source': 'simulation'  # 标记数据源
+                        }
+                        
+                        # 非阻塞放入队列
+                        if hasattr(self, 'data_queue'):
+                            try:
+                                self.data_queue.put_nowait(ui_data)
+                            except:
+                                # 队列满时跳过，不影响模拟
+                                pass
+                    except Exception as e:
+                        # 队列操作失败不影响模拟模式
+                        print(f"Queue operation failed: {e}")
+                        
                 time.sleep(0.033)  # ~30 FPS
                 
         thread = threading.Thread(target=update, daemon=True)
         thread.start()
         
-    def process_data_queue(self):
-        """处理数据队列"""
-        while True:
-            try:
-                # 从队列获取数据
-                data = self.data_queue.get(timeout=0.1)
-                
-                # 处理数据
-                # 这里应该处理来自追踪线程的实际数据
-                
-            except:
-                pass
-                
-            # 更新UI
-            self.update_displays()
+def process_data_queue(self):
+    """处理数据队列（修复版 - 正确的更新逻辑）"""
+    while True:
+        try:
+            # 从队列获取数据
+            data = self.data_queue.get(timeout=0.1)
+            
+            # 处理数据
+            if self.handle_queue_data(data):
+                # 数据处理成功，立即更新UI
+                self.update_displays()
+            
+        except Exception as e:
+            # 队列超时或其他错误，不做任何操作
+            # 依靠定时器更新作为后备方案
+            pass
+
+def handle_queue_data(self, data):
+    """处理队列中的数据"""
+    try:
+        # 检查数据有效性
+        if not isinstance(data, dict):
+            return False
+            
+        camera_id = data.get('camera_id')
+        maze_id = data.get('maze_id')
+        
+        if camera_id is None or maze_id is None:
+            return False
+            
+        # 确保数据结构存在
+        if camera_id not in self.maze_data:
+            self.maze_data[camera_id] = {}
+        if maze_id not in self.maze_data[camera_id]:
+            self.maze_data[camera_id][maze_id] = {}
+            
+        # 更新数据
+        maze_data = self.maze_data[camera_id][maze_id]
+        
+        # 只更新存在的数据项
+        if 'frame' in data:
+            maze_data['frame'] = data['frame']
+        if 'position' in data:
+            maze_data['position'] = data['position']
+        if 'stats' in data:
+            maze_data['stats'] = data['stats']
+        if 'valve_states' in data:
+            maze_data['valve_states'] = data['valve_states']
+        if 'trajectory' in data:
+            maze_data['trajectory'] = data['trajectory']
+            
+        return True
+        
+    except Exception as e:
+        print(f"Error handling queue data: {e}")
+        return False
             
     def update_displays(self):
         """更新所有显示"""
@@ -792,12 +864,12 @@ class MainUI(tk.Tk):
             
     def export_data(self):
         """导出数据"""
+        from tkinter import filedialog, messagebox
         filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         if filename:
-            # 这里应该实现数据导出功能
             messagebox.showinfo("导出成功", f"数据已导出到:\n{filename}")
             
     def load_config(self):

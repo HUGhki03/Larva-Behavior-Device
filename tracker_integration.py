@@ -71,7 +71,7 @@ class TrackerWrapper(threading.Thread):
             self.send_error(str(e))
             
     def handle_tracker_data(self, data):
-        """处理来自追踪器的数据"""
+        """处理来自追踪器的数据（修复版 - 确保数据正确发送）"""
         if self.paused or self.stop_flag:
             return
             
@@ -91,19 +91,33 @@ class TrackerWrapper(threading.Thread):
         if 'valve_states' in data:
             self.valve_states = data['valve_states']
             
-        # 发送数据到UI
-        ui_data = {
-            'camera_id': self.camera_id,
-            'maze_id': self.maze_id,
-            'frame': self.current_frame,
-            'position': self.larva_position,
-            'stats': self.decision_count.copy(),
-            'valve_states': self.valve_states.copy(),
-            'trajectory': list(self.trajectory),
-            'timestamp': time.time()
-        }
-        
-        self.data_queue.put(ui_data)
+        # 发送数据到UI（统一数据流）
+        try:
+            ui_data = {
+                'camera_id': self.camera_id,
+                'maze_id': self.maze_id,
+                'frame': self.current_frame.copy() if self.current_frame is not None else None,
+                'position': self.larva_position,
+                'stats': self.decision_count.copy(),
+                'valve_states': self.valve_states.copy(),
+                'trajectory': list(self.trajectory),
+                'timestamp': time.time(),
+                'source': 'tracker'  # 标记数据源
+            }
+            
+            # 非阻塞发送到队列
+            if hasattr(self, 'data_queue') and self.data_queue is not None:
+                try:
+                    self.data_queue.put_nowait(ui_data)
+                except:
+                    # 队列满时跳过当前数据，不影响追踪
+                    pass
+            else:
+                print(f"Warning: No data_queue available for {self.name}")
+                
+        except Exception as e:
+            print(f"Error sending tracker data: {e}")
+            # 发送错误不影响追踪继续
         
     def pause(self):
         """暂停追踪"""

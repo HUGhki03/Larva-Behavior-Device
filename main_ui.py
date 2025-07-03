@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-幼虫行为追踪多装置实验系统 - 主UI界面
+幼虫行为追踪多装置实验系统 - 主UI界面（修复版）
 支持4个相机，24个迷宫的同时监控
 """
 
@@ -48,6 +48,8 @@ class MazeMonitorWindow(tk.Toplevel):
         self.valve_states = {"odor1": False, "odor2": False, "air": True}
         self.current_state = 0
         self.larva_position = (0, 0)
+        self.region_points = []  # 存储区域标注点
+        self.is_selecting_regions = False
         
         self.setup_ui()
         self.update_display()
@@ -65,6 +67,9 @@ class MazeMonitorWindow(tk.Toplevel):
         self.video_canvas = tk.Canvas(left_frame, width=450, height=450, bg="black")
         self.video_canvas.pack()
         
+        # 绑定鼠标事件用于区域选择
+        self.video_canvas.bind("<Button-1>", self.on_canvas_click)
+        
         # 控制按钮
         control_frame = ttk.Frame(left_frame)
         control_frame.pack(fill=tk.X, pady=(10, 0))
@@ -78,44 +83,48 @@ class MazeMonitorWindow(tk.Toplevel):
         self.stop_btn = ttk.Button(control_frame, text="停止", command=self.stop_tracking)
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
+        # 添加区域选择按钮
+        self.select_region_btn = ttk.Button(control_frame, text="标注区域", command=self.start_region_selection)
+        self.select_region_btn.pack(side=tk.LEFT, padx=5)
+        
         # 状态显示
-        status_frame = ttk.LabelFrame(left_frame, text="状态", padding=5)
+        status_frame = ttk.LabelFrame(left_frame, text="状态信息", padding=10)
         status_frame.pack(fill=tk.X, pady=(10, 0))
         
-        self.status_label = ttk.Label(status_frame, text="状态：就绪")
-        self.status_label.pack()
+        self.status_label = ttk.Label(status_frame, text="状态：准备就绪")
+        self.status_label.pack(anchor=tk.W)
         
-        self.position_label = ttk.Label(status_frame, text="幼虫位置：未知")
-        self.position_label.pack()
+        self.position_label = ttk.Label(status_frame, text="幼虫位置：(0, 0)")
+        self.position_label.pack(anchor=tk.W)
         
-        # 右侧 - 统计和阀门状态
+        self.state_label = ttk.Label(status_frame, text="当前状态：中心")
+        self.state_label.pack(anchor=tk.W)
+        
+        # 右侧 - 统计信息
         right_frame = ttk.Frame(main_frame)
         right_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         
-        # 统计信息
-        stats_frame = ttk.LabelFrame(right_frame, text="统计信息", padding=10)
-        stats_frame.pack(fill=tk.BOTH, expand=True)
+        # 决策统计
+        stats_frame = ttk.LabelFrame(right_frame, text="决策统计", padding=10)
+        stats_frame.pack(fill=tk.X)
         
-        # 决策计数
-        count_frame = ttk.Frame(stats_frame)
-        count_frame.pack(fill=tk.X)
+        # 统计显示
+        ttk.Label(stats_frame, text="气味A选择：").grid(row=0, column=0, sticky="w")
+        self.odor_a_count = ttk.Label(stats_frame, text="0")
+        self.odor_a_count.grid(row=0, column=1)
         
-        ttk.Label(count_frame, text="选择气味A:").grid(row=0, column=0, sticky="w")
-        self.odor_a_count = ttk.Label(count_frame, text="0", font=("Arial", 14, "bold"))
-        self.odor_a_count.grid(row=0, column=1, padx=10)
+        ttk.Label(stats_frame, text="气味B选择：").grid(row=1, column=0, sticky="w")
+        self.odor_b_count = ttk.Label(stats_frame, text="0")
+        self.odor_b_count.grid(row=1, column=1)
         
-        ttk.Label(count_frame, text="选择气味B:").grid(row=1, column=0, sticky="w")
-        self.odor_b_count = ttk.Label(count_frame, text="0", font=("Arial", 14, "bold"))
-        self.odor_b_count.grid(row=1, column=1, padx=10)
-        
-        ttk.Label(count_frame, text="选择空气:").grid(row=2, column=0, sticky="w")
-        self.air_count = ttk.Label(count_frame, text="0", font=("Arial", 14, "bold"))
-        self.air_count.grid(row=2, column=1, padx=10)
+        ttk.Label(stats_frame, text="空气选择：").grid(row=2, column=0, sticky="w")
+        self.air_count = ttk.Label(stats_frame, text="0")
+        self.air_count.grid(row=2, column=1)
         
         # 饼图
-        self.setup_pie_chart(stats_frame)
+        self.create_pie_chart(right_frame)
         
-        # 阀门状态显示
+        # 阀门状态
         valve_frame = ttk.LabelFrame(right_frame, text="阀门状态", padding=10)
         valve_frame.pack(fill=tk.X, pady=(10, 0))
         
@@ -124,18 +133,59 @@ class MazeMonitorWindow(tk.Toplevel):
             frame = ttk.Frame(valve_frame)
             frame.pack(fill=tk.X, pady=2)
             ttk.Label(frame, text=f"{label}:").pack(side=tk.LEFT)
-            indicator = tk.Canvas(frame, width=20, height=20, highlightthickness=0)
-            indicator.pack(side=tk.LEFT, padx=10)
-            indicator.create_oval(2, 2, 18, 18, fill="gray", tags="indicator")
-            self.valve_indicators[name] = indicator
-        
-        # 配置grid权重
+            canvas = tk.Canvas(frame, width=20, height=20)
+            canvas.pack(side=tk.LEFT, padx=(10, 0))
+            canvas.create_oval(2, 2, 18, 18, fill="gray", tags="indicator")
+            self.valve_indicators[name] = canvas
+            
+        # 配置网格权重
         main_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
         
-    def setup_pie_chart(self, parent):
-        """设置饼图"""
+    def on_canvas_click(self, event):
+        """处理画布点击事件"""
+        if self.is_selecting_regions:
+            x, y = event.x, event.y
+            self.region_points.append((x, y))
+            
+            # 在画布上绘制点
+            self.video_canvas.create_oval(x-3, y-3, x+3, y+3, fill="red", tags="region_point")
+            
+            # 如果已经选择了7个点，完成选择
+            if len(self.region_points) == 7:
+                self.finish_region_selection()
+                
+    def start_region_selection(self):
+        """开始区域选择"""
+        self.is_selecting_regions = True
+        self.region_points = []
+        self.video_canvas.delete("region_point")
+        self.select_region_btn.config(text="取消选择")
+        self.select_region_btn.config(command=self.cancel_region_selection)
+        messagebox.showinfo("区域选择", "请依次点击7个区域中心点：\n1. 迷宫中心\n2-4. 三个通道\n5-7. 三个圆形区域")
+        
+    def cancel_region_selection(self):
+        """取消区域选择"""
+        self.is_selecting_regions = False
+        self.region_points = []
+        self.video_canvas.delete("region_point")
+        self.select_region_btn.config(text="标注区域")
+        self.select_region_btn.config(command=self.start_region_selection)
+        
+    def finish_region_selection(self):
+        """完成区域选择"""
+        self.is_selecting_regions = False
+        self.select_region_btn.config(text="重新标注")
+        self.select_region_btn.config(command=self.start_region_selection)
+        
+        # 保存区域信息到父窗口
+        if hasattr(self.parent, 'save_region_data'):
+            self.parent.save_region_data(self.camera_id, self.maze_id, self.region_points)
+            
+        messagebox.showinfo("完成", "区域标注完成！")
+        
+    def create_pie_chart(self, parent):
+        """创建饼图"""
         self.fig = Figure(figsize=(4, 3), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas_plot = FigureCanvasTkAgg(self.fig, parent)
@@ -224,6 +274,16 @@ class MazeMonitorWindow(tk.Toplevel):
             for i in range(1, len(self.trajectory)):
                 cv2.line(frame, self.trajectory[i-1], self.trajectory[i], (255, 0, 0), 2)
                 
+        # 绘制区域边界
+        if self.region_points and len(self.region_points) == 7:
+            # 使用region_shihan的方法绘制区域
+            try:
+                from region_shihan import Region
+                region = Region(self.region_points[0], self.region_points)
+                frame = region.drawRegions(frame)
+            except:
+                pass
+                
         # 转换为PIL图像
         image = Image.fromarray(frame)
         photo = ImageTk.PhotoImage(image)
@@ -248,6 +308,8 @@ class MainUI(tk.Tk):
         self.maze_data = defaultdict(dict)  # 存储每个迷宫的数据
         self.data_queue = Queue()  # 数据队列
         self.detail_windows = {}  # 详细窗口
+        self.region_data = {}  # 存储区域标注数据
+        self.simulation_mode = False  # 模拟模式标志
         
         # 初始化UI
         self.setup_ui()
@@ -258,6 +320,13 @@ class MainUI(tk.Tk):
         # 启动数据处理线程
         self.data_thread = threading.Thread(target=self.process_data_queue, daemon=True)
         self.data_thread.start()
+        
+        # 添加UI定时更新（解决画面不显示问题）
+        def timer_update():
+            self.update_displays()
+            self.after(50, timer_update)  # 20 FPS
+        self.after(100, timer_update)  # 100ms后开始
+        
         
     def setup_ui(self):
         """设置UI界面"""
@@ -331,10 +400,23 @@ class MainUI(tk.Tk):
         
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         
+        # 模拟模式复选框
+        self.simulation_var = tk.BooleanVar()
+        ttk.Checkbutton(toolbar, text="模拟模式", variable=self.simulation_var, 
+                       command=self.toggle_simulation_mode).pack(side=tk.LEFT, padx=5)
+        
         # 实时统计
         self.total_decisions = ttk.Label(toolbar, text="总决策数: 0")
         self.total_decisions.pack(side=tk.RIGHT, padx=10)
         
+    def toggle_simulation_mode(self):
+        """切换模拟模式"""
+        self.simulation_mode = self.simulation_var.get()
+        if self.simulation_mode:
+            self.status_text.set("已切换到模拟模式")
+        else:
+            self.status_text.set("已切换到实际硬件模式")
+            
     def create_main_interface(self):
         """创建主界面"""
         # 创建标签页
@@ -347,144 +429,122 @@ class MainUI(tk.Tk):
             tab = ttk.Frame(self.notebook)
             self.notebook.add(tab, text=f"相机 {cam_id}")
             self.camera_tabs[cam_id] = tab
-            self.create_camera_tab(tab, cam_id)
+            
+            # 创建迷宫网格
+            self.create_maze_grid(tab, cam_id)
             
         # 添加全局统计标签页
         stats_tab = ttk.Frame(self.notebook)
         self.notebook.add(stats_tab, text="全局统计")
-        self.create_stats_tab(stats_tab)
+        self.create_global_stats(stats_tab)
         
-    def create_camera_tab(self, parent, camera_id):
-        """创建相机标签页"""
-        # 创建6个迷宫的预览
-        maze_frame = ttk.LabelFrame(parent, text=f"相机 {camera_id} - 迷宫预览", padding=10)
-        maze_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # 创建2x3的网格布局
-        for i in range(6):
-            row = i // 3
-            col = i % 3
-            
-            # 迷宫框架
-            frame = ttk.Frame(maze_frame, relief=tk.RAISED, borderwidth=2)
-            frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
-            
-            # 迷宫名称
-            maze_name = f"{chr(65+i)}"  # A-F
-            label = ttk.Label(frame, text=f"迷宫 {maze_name}", font=("Arial", 12, "bold"))
-            label.pack(pady=5)
-            
-            # 预览画布
-            canvas = tk.Canvas(frame, width=200, height=200, bg="black")
-            canvas.pack(padx=5, pady=5)
-            canvas.bind("<Button-1>", lambda e, c=camera_id, m=i: self.open_detail_window(c, m))
-            
-            # 状态显示
-            status_frame = ttk.Frame(frame)
-            status_frame.pack(fill=tk.X, padx=5, pady=5)
-            
-            status_label = ttk.Label(status_frame, text="状态: 就绪")
-            status_label.pack()
-            
-            decision_label = ttk.Label(status_frame, text="决策: 0/0/0")
-            decision_label.pack()
-            
-            # 保存引用
-            if camera_id not in self.maze_data:
-                self.maze_data[camera_id] = {}
-            self.maze_data[camera_id][i] = {
-                'canvas': canvas,
-                'status_label': status_label,
-                'decision_label': decision_label,
-                'frame': None,
-                'stats': {'odor_a': 0, 'odor_b': 0, 'air': 0}
-            }
-            
+    def create_maze_grid(self, parent, camera_id):
+        """创建迷宫网格"""
+        # 创建2x3的网格
+        for row in range(2):
+            for col in range(3):
+                maze_id = row * 3 + col
+                maze_frame = self.create_maze_preview(parent, camera_id, maze_id)
+                maze_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+                
         # 配置网格权重
         for i in range(3):
-            maze_frame.columnconfigure(i, weight=1)
+            parent.columnconfigure(i, weight=1)
         for i in range(2):
-            maze_frame.rowconfigure(i, weight=1)
+            parent.rowconfigure(i, weight=1)
             
-    def create_stats_tab(self, parent):
-        """创建全局统计标签页"""
-        # 总体统计
-        overall_frame = ttk.LabelFrame(parent, text="总体统计", padding=10)
-        overall_frame.pack(fill=tk.X, padx=10, pady=10)
+    def create_maze_preview(self, parent, camera_id, maze_id):
+        """创建单个迷宫预览"""
+        maze_name = f"Cam{camera_id}_{chr(65+maze_id)}"
+        
+        # 迷宫框架
+        frame = ttk.LabelFrame(parent, text=maze_name, padding=10)
+        
+        # 预览画布
+        canvas = tk.Canvas(frame, width=200, height=200, bg="gray")
+        canvas.pack()
+        
+        # 绑定点击事件
+        canvas.bind("<Button-1>", lambda e: self.open_detail_window(camera_id, maze_id))
+        
+        # 控制按钮
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        start_btn = ttk.Button(btn_frame, text="开始", 
+                              command=lambda: self.start_single_maze(camera_id, maze_id))
+        start_btn.pack(side=tk.LEFT, padx=2)
+        
+        stop_btn = ttk.Button(btn_frame, text="停止",
+                             command=lambda: self.stop_single_maze(camera_id, maze_id))
+        stop_btn.pack(side=tk.LEFT, padx=2)
+        
+        # 状态标签
+        status_label = ttk.Label(frame, text="状态: 准备就绪")
+        status_label.pack()
+        
+        decision_label = ttk.Label(frame, text="决策: 0/0/0")
+        decision_label.pack()
+        
+        # 存储UI元素引用
+        if camera_id not in self.maze_data:
+            self.maze_data[camera_id] = {}
+        self.maze_data[camera_id][maze_id] = {
+            'canvas': canvas,
+            'status_label': status_label,
+            'decision_label': decision_label,
+            'stats': {'odor_a': 0, 'odor_b': 0, 'air': 0},
+            'frame': None,
+            'position': (0, 0),
+            'valve_states': {}
+        }
+        
+        return frame
+        
+    def create_global_stats(self, parent):
+        """创建全局统计页面"""
+        # 统计信息框架
+        stats_frame = ttk.LabelFrame(parent, text="实验统计", padding=20)
+        stats_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # 创建统计标签
-        stats_grid = ttk.Frame(overall_frame)
-        stats_grid.pack()
-        
-        labels = [
-            ("活跃迷宫数:", "0/24"),
-            ("总决策数:", "0"),
-            ("平均决策/迷宫:", "0.0"),
-            ("实验时长:", "00:00:00")
+        self.stats_labels = {}
+        stats_items = [
+            "实验开始时间:", "运行时长:", "活跃迷宫数:", 
+            "总决策数:", "平均决策/迷宫:", "错误数:"
         ]
         
-        self.stats_labels = {}
-        for i, (name, default) in enumerate(labels):
-            ttk.Label(stats_grid, text=name).grid(row=i//2, column=(i%2)*2, sticky="w", padx=10, pady=5)
-            label = ttk.Label(stats_grid, text=default, font=("Arial", 12, "bold"))
-            label.grid(row=i//2, column=(i%2)*2+1, sticky="w", padx=10, pady=5)
-            self.stats_labels[name] = label
+        for i, item in enumerate(stats_items):
+            row = i // 2
+            col = (i % 2) * 2
+            ttk.Label(stats_frame, text=item, font=("Arial", 12)).grid(row=row, column=col, sticky="w", padx=10, pady=5)
+            label = ttk.Label(stats_frame, text="--", font=("Arial", 12, "bold"))
+            label.grid(row=row, column=col+1, sticky="w", padx=10, pady=5)
+            self.stats_labels[item] = label
             
-        # 实时图表
-        chart_frame = ttk.LabelFrame(parent, text="实时趋势", padding=10)
-        chart_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # 创建matplotlib图表
-        self.create_realtime_chart(chart_frame)
-        
-    def create_realtime_chart(self, parent):
-        """创建实时趋势图"""
-        self.fig_realtime = Figure(figsize=(10, 6), dpi=100)
-        
-        # 决策趋势图
-        self.ax1 = self.fig_realtime.add_subplot(211)
-        self.ax1.set_title('决策趋势')
-        self.ax1.set_xlabel('时间 (分钟)')
-        self.ax1.set_ylabel('累计决策数')
-        
-        # 成功率趋势图
-        self.ax2 = self.fig_realtime.add_subplot(212)
-        self.ax2.set_title('选择比例趋势')
-        self.ax2.set_xlabel('时间 (分钟)')
-        self.ax2.set_ylabel('比例 (%)')
-        
-        self.canvas_realtime = FigureCanvasTkAgg(self.fig_realtime, parent)
-        self.canvas_realtime.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        # 初始化数据
-        self.time_data = deque(maxlen=300)  # 5分钟的数据
-        self.decision_data = deque(maxlen=300)
-        self.ratio_data = {'odor_a': deque(maxlen=300), 'odor_b': deque(maxlen=300)}
-        
     def create_statusbar(self):
         """创建状态栏"""
         statusbar = ttk.Frame(self)
         statusbar.pack(side=tk.BOTTOM, fill=tk.X)
         
-        # 状态信息
+        # 状态文本
         self.status_text = tk.StringVar()
         self.status_text.set("系统就绪")
-        status_label = ttk.Label(statusbar, textvariable=self.status_text, relief=tk.SUNKEN)
-        status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(statusbar, textvariable=self.status_text).pack(side=tk.LEFT, padx=10)
         
         # 连接状态
-        self.connection_status = ttk.Label(statusbar, text="相机: 0/4 | 阀门: 未连接", relief=tk.SUNKEN)
+        self.connection_status = ttk.Label(statusbar, text="相机: 0/4 | 阀门: 未连接")
         self.connection_status.pack(side=tk.RIGHT, padx=10)
         
     def init_hardware(self):
         """初始化硬件"""
-        # 这里应该初始化相机和阀门控制
-        # 暂时使用模拟数据
-        self.status_text.set("正在初始化硬件...")
-        
-        # 初始化相机
         try:
+            if self.simulation_mode:
+                self.status_text.set("使用模拟模式")
+                return
+                
             # 枚举相机
+            import mvsdk
             DevList = mvsdk.CameraEnumerateDevice()
             camera_count = min(len(DevList), 4)
             
@@ -498,8 +558,21 @@ class MainUI(tk.Tk):
             
         except Exception as e:
             self.status_text.set(f"硬件初始化失败: {str(e)}")
-            # 使用模拟模式
-            self.use_simulation = True
+            # 自动切换到模拟模式
+            self.simulation_mode = True
+            self.simulation_var.set(True)
+            
+    def save_region_data(self, camera_id, maze_id, points):
+        """保存区域标注数据"""
+        key = f"{camera_id}_{maze_id}"
+        self.region_data[key] = points
+        
+        # 保存到文件
+        try:
+            with open(f"regions_{key}.json", "w") as f:
+                json.dump(points, f)
+        except:
+            pass
             
     def open_detail_window(self, camera_id, maze_id):
         """打开详细监控窗口"""
@@ -533,18 +606,17 @@ class MainUI(tk.Tk):
             self.status_text.set("所有实验已启动")
             
     def stop_all(self):
-        """停止所有实验"""
-        if self.running:
-            self.running = False
-            self.status_text.set("正在停止所有实验...")
+        """停止所有实验（修复版）"""
+        self.running = False
+        self.status_text.set("正在停止所有实验...")
+        
+        # 停止所有追踪线程
+        for key in list(self.trackers.keys()):
+            cam_id, maze_id = key.split('_')
+            self.stop_single_maze(int(cam_id), int(maze_id))
             
-            # 停止所有追踪线程
-            for tracker in self.trackers.values():
-                if hasattr(tracker, 'stop'):
-                    tracker.stop()
-                    
-            self.trackers.clear()
-            self.status_text.set("所有实验已停止")
+        self.trackers.clear()
+        self.status_text.set("所有实验已停止")
             
     def emergency_stop(self):
         """紧急停止 - 关闭所有阀门"""
@@ -563,14 +635,21 @@ class MainUI(tk.Tk):
         """启动单个迷宫的追踪"""
         key = f"{camera_id}_{maze_id}"
         if key not in self.trackers:
-            # 创建并启动追踪线程
-            # 这里应该调用实际的livetracker类
-            # tracker = livetracker(name=f"Cam{camera_id}_{chr(65+maze_id)}")
-            # self.trackers[key] = tracker
-            # tracker.start()
+            if self.simulation_mode:
+                # 模拟模式
+                self.simulate_maze_data(camera_id, maze_id)
+            else:
+                # 实际硬件模式
+                try:
+                    # 这里应该调用实际的livetracker类
+                    pass
+                except:
+                    # 如果失败，使用模拟模式
+                    self.simulate_maze_data(camera_id, maze_id)
             
-            # 模拟数据更新
-            self.simulate_maze_data(camera_id, maze_id)
+            # 更新状态
+            if camera_id in self.maze_data and maze_id in self.maze_data[camera_id]:
+                self.maze_data[camera_id][maze_id]['status_label'].config(text="状态: 运行中")
             
     def pause_single_maze(self, camera_id, maze_id):
         """暂停单个迷宫"""
@@ -584,20 +663,33 @@ class MainUI(tk.Tk):
         key = f"{camera_id}_{maze_id}"
         if key in self.trackers:
             # 停止追踪
-            self.trackers.pop(key)
+            self.trackers[key] = None  # 标记为停止
+            
+        # 更新状态
+        if camera_id in self.maze_data and maze_id in self.maze_data[camera_id]:
+            self.maze_data[camera_id][maze_id]['status_label'].config(text="状态: 已停止")
             
     def simulate_maze_data(self, camera_id, maze_id):
-        """模拟迷宫数据（用于测试）"""
+        """模拟迷宫数据（修复版 - 减少雪花点）"""
+        key = f"{camera_id}_{maze_id}"
+        self.trackers[key] = True  # 标记为运行中
+        
         def update():
-            while self.running:
-                # 生成模拟数据
-                frame = np.random.randint(0, 255, (450, 450), dtype=np.uint8)
+            # 创建持久的背景
+            background = np.ones((450, 450), dtype=np.uint8) * 128
+            
+            while self.running and key in self.trackers and self.trackers[key]:
+                # 使用背景的副本
+                frame = background.copy()
                 
-                # 添加一个移动的圆表示幼虫
+                # 添加一个移动的圆表示幼虫（减少噪声）
                 t = time.time()
-                x = int(225 + 100 * np.sin(t))
-                y = int(225 + 100 * np.cos(t))
+                x = int(225 + 100 * np.sin(t * 0.5))  # 减慢移动速度
+                y = int(225 + 100 * np.cos(t * 0.5))
                 cv2.circle(frame, (x, y), 10, 255, -1)
+                
+                # 添加少量高斯模糊以减少锐利边缘
+                frame = cv2.GaussianBlur(frame, (3, 3), 0)
                 
                 # 更新数据
                 if camera_id in self.maze_data and maze_id in self.maze_data[camera_id]:
@@ -617,7 +709,7 @@ class MainUI(tk.Tk):
                         'air': np.random.random() < 0.4
                     }
                     
-                time.sleep(0.1)
+                time.sleep(0.033)  # ~30 FPS
                 
         thread = threading.Thread(target=update, daemon=True)
         thread.start()
@@ -733,6 +825,7 @@ class MainUI(tk.Tk):
                 config = {
                     'experiment_mode': self.exp_mode.get(),
                     'training_cycles': self.training_cycles.get(),
+                    'region_data': self.region_data,
                     # 添加其他配置
                 }
                 with open(filename, 'w', encoding='utf-8') as f:
@@ -757,25 +850,27 @@ class MainUI(tk.Tk):
 1. 系统启动后会自动检测并连接相机
 2. 点击"开始所有"按钮启动所有迷宫的追踪
 3. 点击迷宫缩略图可以打开详细监控窗口
-4. 使用"紧急停止"按钮可以立即关闭所有阀门
+4. 在详细窗口中可以标注迷宫的7个区域
+5. 使用紧急停止按钮可以立即停止所有实验
+
+区域标注说明:
+- 点击"标注区域"按钮开始标注
+- 依次点击7个区域中心点
+- 标注完成后会自动保存
 
 快捷键:
 - F1: 显示帮助
 - F5: 开始/停止所有实验
-- ESC: 紧急停止
+- Esc: 紧急停止
         """
         messagebox.showinfo("使用说明", help_text)
         
     def show_about(self):
-        """显示关于对话框"""
+        """显示关于"""
         about_text = """
 幼虫行为追踪多装置实验系统
-
-版本: 1.0.0
-开发日期: 2025-01
-
-本系统用于同时监控24个Y型迷宫中
-果蝇幼虫的行为，记录其对气味的选择偏好。
+版本: 1.0
+作者: 实验室团队
         """
         messagebox.showinfo("关于", about_text)
 
@@ -786,47 +881,48 @@ class SettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("实验参数设置")
-        self.geometry("600x500")
+        self.geometry("500x600")
         
-        # 创建标签页
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # 创建设置界面
+        self.create_settings_ui()
         
+    def create_settings_ui(self):
+        """创建设置界面"""
         # 基本设置
-        basic_frame = ttk.Frame(notebook)
-        notebook.add(basic_frame, text="基本设置")
+        basic_frame = ttk.LabelFrame(self, text="基本设置", padding=10)
+        basic_frame.pack(fill=tk.X, padx=10, pady=10)
+        
         self.create_basic_settings(basic_frame)
         
         # 高级设置
-        advanced_frame = ttk.Frame(notebook)
-        notebook.add(advanced_frame, text="高级设置")
+        advanced_frame = ttk.LabelFrame(self, text="高级设置", padding=10)
+        advanced_frame.pack(fill=tk.X, padx=10, pady=10)
+        
         self.create_advanced_settings(advanced_frame)
         
         # 按钮
         button_frame = ttk.Frame(self)
         button_frame.pack(fill=tk.X, pady=10)
-        ttk.Button(button_frame, text="确定", command=self.save_settings).pack(side=tk.RIGHT, padx=10)
+        
+        ttk.Button(button_frame, text="保存", command=self.save_settings).pack(side=tk.RIGHT, padx=10)
         ttk.Button(button_frame, text="取消", command=self.destroy).pack(side=tk.RIGHT)
         
     def create_basic_settings(self, parent):
         """创建基本设置"""
-        frame = ttk.LabelFrame(parent, text="实验参数", padding=10)
-        frame.pack(fill=tk.X, padx=10, pady=10)
-        
         # 实验时长
-        ttk.Label(frame, text="实验时长 (秒):").grid(row=0, column=0, sticky="w", pady=5)
-        self.duration = tk.Spinbox(frame, from_=60, to=7200, width=10, value=3600)
+        ttk.Label(parent, text="实验时长 (秒):").grid(row=0, column=0, sticky="w", pady=5)
+        self.duration = tk.Spinbox(parent, from_=60, to=7200, width=10, value=3600)
         self.duration.grid(row=0, column=1, pady=5)
         
         # CO2浓度
-        ttk.Label(frame, text="CO2浓度 (%):").grid(row=1, column=0, sticky="w", pady=5)
-        self.co2_concentration = tk.Scale(frame, from_=0, to=100, orient=tk.HORIZONTAL, length=200)
+        ttk.Label(parent, text="CO2浓度 (%):").grid(row=1, column=0, sticky="w", pady=5)
+        self.co2_concentration = tk.Scale(parent, from_=0, to=100, orient=tk.HORIZONTAL, length=200)
         self.co2_concentration.set(18)
         self.co2_concentration.grid(row=1, column=1, pady=5)
         
         # 训练间隔
-        ttk.Label(frame, text="训练间隔 (秒):").grid(row=2, column=0, sticky="w", pady=5)
-        self.interval = tk.Spinbox(frame, from_=1, to=60, width=10, value=15)
+        ttk.Label(parent, text="训练间隔 (秒):").grid(row=2, column=0, sticky="w", pady=5)
+        self.interval = tk.Spinbox(parent, from_=1, to=60, width=10, value=15)
         self.interval.grid(row=2, column=1, pady=5)
         
     def create_advanced_settings(self, parent):

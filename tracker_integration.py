@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-追踪器集成模块 - 将现有的livetracker与UI集成
+追踪器集成模块 - 修复版，避免重复初始化相机
 """
 
 import threading
@@ -228,15 +228,40 @@ class CustomLiveTracker(livetracker):
 
 class CameraManager:
     """
-    相机管理器 - 管理多个相机的连接和数据流
+    相机管理器 - 修复版，不重复初始化相机
     """
     def __init__(self):
-        self.cameras = {}
+        self.cameras = {}  # 存储相机对象
         self.camera_threads = {}
         self.frame_buffers = {}
         
+    def set_cameras(self, cameras):
+        """设置已经初始化的相机对象"""
+        self.cameras = cameras
+        self.logger.info(f"使用 {len(cameras)} 个已初始化的相机")
+        
+        # 为每个相机创建帧缓冲区和采集线程
+        for camera_id, camera in cameras.items():
+            # 创建帧缓冲区
+            self.frame_buffers[camera_id] = Queue(maxsize=10)
+            
+            # 启动采集线程
+            thread = threading.Thread(
+                target=self.capture_thread,
+                args=(camera_id, camera),
+                daemon=True
+            )
+            thread.start()
+            self.camera_threads[camera_id] = thread
+            
+        return len(self.cameras)
+        
     def initialize_cameras(self):
-        """初始化所有相机"""
+        """初始化所有相机（修复版 - 检查是否已经初始化）"""
+        if self.cameras:
+            print(f"相机已经初始化，共 {len(self.cameras)} 个")
+            return len(self.cameras)
+            
         try:
             import mvsdk
             
@@ -298,13 +323,10 @@ class CameraManager:
         return None
         
     def close_all(self):
-        """关闭所有相机"""
-        for camera in self.cameras.values():
-            try:
-                camera.close()
-            except:
-                pass
-                
+        """关闭所有相机（注意：不在这里关闭，由系统统一管理）"""
+        # 不关闭相机，只清理线程
+        print("清理相机采集线程...")
+
 
 class DataRecorder:
     """
@@ -371,6 +393,7 @@ class DataRecorder:
             pos_str = f"[{position[0]},{position[1]}]"
             line = f"{pos_str},{frame_count},{elapsed_time:.2f},{velocity:.2f},{in_region}\n"
             self.file_handles[maze_name]['position'].write(line)
+            self.file_handles[maze_name]['position'].flush()
             
     def format_video_time(self, frame_count, fps=30):
         """格式化视频时间"""
@@ -404,7 +427,7 @@ class DataRecorder:
 
 class ExperimentController:
     """
-    实验控制器 - 协调整个实验系统
+    实验控制器 - 修复版，避免重复初始化相机
     """
     def __init__(self, ui_callback=None):
         self.ui_callback = ui_callback
@@ -415,6 +438,10 @@ class ExperimentController:
         
         # 阀门任务
         self.valve_tasks = self.init_valve_tasks()
+        
+    def set_cameras(self, cameras):
+        """设置已经初始化的相机对象"""
+        self.camera_manager.set_cameras(cameras)
         
     def init_valve_tasks(self):
         """初始化阀门任务"""
@@ -440,10 +467,13 @@ class ExperimentController:
         return tasks
         
     def initialize(self):
-        """初始化系统"""
-        # 初始化相机
-        num_cameras = self.camera_manager.initialize_cameras()
-        
+        """初始化系统（修复版 - 不重复初始化相机）"""
+        # 如果没有预设相机，则初始化
+        if not self.camera_manager.cameras:
+            num_cameras = self.camera_manager.initialize_cameras()
+        else:
+            num_cameras = len(self.camera_manager.cameras)
+            
         # 启动数据处理线程
         self.data_thread = threading.Thread(
             target=self.process_data,
@@ -461,11 +491,17 @@ class ExperimentController:
             # 确定使用哪个任务
             task = self.valve_tasks.get('task1' if camera_id < 2 else 'task2')
             
+            # 获取相机对象
+            camera_obj = self.camera_manager.cameras.get(camera_id)
+            if not camera_obj:
+                print(f"相机 {camera_id} 不存在")
+                return
+                
             # 创建追踪器
             tracker = TrackerWrapper(
                 camera_id=camera_id,
                 maze_id=maze_id,
-                camera_obj=self.camera_manager.cameras.get(camera_id),
+                camera_obj=camera_obj,
                 task=task,
                 data_queue=self.data_queue
             )
@@ -517,12 +553,15 @@ class ExperimentController:
         # 根据数据类型记录不同的信息
         
     def shutdown(self):
-        """关闭系统"""
+        """关闭系统（修复版）"""
         # 停止所有追踪器
-        for tracker in self.trackers.values():
-            tracker.stop()
-            
-        # 关闭相机
+        for tracker in list(self.trackers.values()):
+            try:
+                tracker.stop()
+            except:
+                pass
+                
+        # 清理相机管理器（但不关闭相机）
         self.camera_manager.close_all()
         
         # 关闭数据记录

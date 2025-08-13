@@ -1,4 +1,4 @@
-from region import Region
+from region_shihan import Region
 import numpy as np
 
 # creates the state machine and defines the seven states: the center of the maze, the 3 channels, and the 3 circles
